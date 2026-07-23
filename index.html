@@ -128,6 +128,7 @@
 
   <div id="status" class="status"></div>
   <div id="log" class="log"></div>
+  <button id="copyLogBtn" class="ghost-btn" type="button">Copy details</button>
   <div id="scenes" class="scenes"></div>
 
   <footer>
@@ -226,6 +227,25 @@ function scriptPrompt(topic) {
   ].join(" ");
 }
 
+function describeError(err) {
+  if (!err) return "Unknown error";
+  if (typeof err === "string") return err;
+  const parts = [];
+  if (err.message) parts.push(err.message);
+  if (err.error) {
+    if (typeof err.error === "string") parts.push(err.error);
+    else if (err.error.message) parts.push(err.error.message);
+  }
+  if (parts.length === 0) {
+    try {
+      parts.push(JSON.stringify(err));
+    } catch (e) {
+      parts.push(String(err));
+    }
+  }
+  return parts.join(" | ");
+}
+
 function extractChatText(response) {
   if (typeof response === "string") return response;
   if (response && response.message && response.message.content) {
@@ -311,13 +331,17 @@ async function handleGenerate() {
         "Generating image " + (i + 1) + " of " + script.scenes.length + "..."
       );
       log("Scene " + (i + 1) + ": generating image...");
-      const imgEl = await puter.ai.txt2img(scene.image_prompt);
+      const imgEl = await puter.ai.txt2img(scene.image_prompt, {
+        model: "gpt-image-1",
+      });
 
       setStatus(
         "Generating voiceover " + (i + 1) + " of " + script.scenes.length + "..."
       );
       log("Scene " + (i + 1) + ": generating voiceover...");
-      const audioResult = await puter.ai.txt2speech(scene.narration);
+      const audioResult = await puter.ai.txt2speech(scene.narration, {
+        provider: "openai",
+      });
       const audioEl = toAudioElement(audioResult);
 
       renderScene(i, scene, imgEl, audioEl);
@@ -327,16 +351,48 @@ async function handleGenerate() {
     log("All 4 scenes generated.");
   } catch (err) {
     setStatus(
-      "Something failed: " + (err && err.message ? err.message : String(err))
+      "Something failed: " + describeError(err)
     );
-    log("ERROR: " + (err && err.message ? err.message : String(err)));
+    log("ERROR: " + describeError(err));
   } finally {
     generateBtn.disabled = false;
   }
 }
 
+async function copyDebugInfo() {
+  const status = document.getElementById("status").textContent;
+  const logLines = Array.from(document.querySelectorAll(".log-line")).map(
+    (l) => l.textContent
+  );
+  const title = document.getElementById("videoTitle").textContent;
+  const tags = document.getElementById("videoTags").textContent;
+  const report = [
+    "Status: " + status,
+    "Title: " + title,
+    "Tags: " + tags,
+    "Log:",
+    ...logLines,
+  ].join("\n");
+
+  const btn = document.getElementById("copyLogBtn");
+  const original = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(report);
+    btn.textContent = "Copied!";
+  } catch (err) {
+    alert(
+      "Couldn't copy automatically, long-press the log text above and copy manually."
+    );
+  }
+  setTimeout(() => {
+    btn.textContent = original;
+  }, 1500);
+}
+
 document.getElementById("surpriseBtn").addEventListener("click", pickSeedTopic);
 document.getElementById("generateBtn").addEventListener("click", handleGenerate);
+document.getElementById("copyLogBtn").addEventListener("click", copyDebugInfo);
 </script>
 </body>
 </html>
+
