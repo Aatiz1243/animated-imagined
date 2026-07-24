@@ -231,6 +231,309 @@ function describeError(err) {
   if (!err) return "Unknown error";
   if (typeof err === "string") return err;
   const parts = [];
+  if (err.message) parts.push("message: " + err.message);
+  if (err.error) {
+    if (typeof err.error === "string") parts.push("error: " + err.error);
+    else if (err.error.message) parts.push("error.message: " + err.error.message);
+    else {
+      try {
+        parts.push("error: " + JSON.stringify(err.error));
+      } catch (e) {}
+    }
+  }
+  if (err.status) parts.push("status: " + err.status);
+  if (err.code) parts.push("code: " + err.code);
+  try {
+    const skip = ["message", "error", "status", "code", "stack", "_puterReq"];
+    const extra = {};
+    Object.getOwnPropertyNames(err).forEach((k) => {
+      if (!skip.includes(k)) extra[k] = err[k];
+    });
+    if (Object.keys(extra).length > 0) {
+      parts.push("other: " + JSON.stringify(extra));
+    }
+  } catch (e) {}
+  if (parts.length === 0) {
+    try {
+      parts.push(JSON.stringify(err));
+    } catch (e) {
+      parts.push(String(err));
+    }
+  }
+  return parts.join(" | ");
+}
+
+function extractChatText(response) {
+  if (typeof response === "string") return response;
+  if (response && response.message && response.message.content) {
+    const content = response.message.content;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      const block = content.find((b) => b && (b.text || b.type === "text"));
+      if (block && block.text) return block.text;
+    }
+  }
+  if (response && response.text) return response.text;
+  return String(response);
+}
+
+async function generateScript(topic) {
+  const response = await puter.ai.chat(scriptPrompt(topic), {
+    model: "claude-sonnet-4-6",
+  });
+  const raw = extractChatText(response);
+  const cleaned = raw.replace(/```json|```/g, "").trim();
+  return JSON.parse(cleaned);
+}
+
+function toAudioElement(result) {
+  if (result && result.tagName === "AUDIO") {
+    result.controls = true;
+    return result;
+  }
+  const el = document.createElement("audio");
+  el.controls = true;
+  el.src = result && result.src ? result.src : result;
+  return el;
+}
+
+function renderScene(index, scene, imgEl, audioEl) {
+  const container = document.getElementById("scenes");
+  const card = document.createElement("div");
+  card.className = "scene-card";
+
+  const label = document.createElement("div");
+  label.className = "scene-label";
+  label.textContent = "Scene " + (index + 1);
+  card.appendChild(label);
+
+  imgEl.alt = "Scene " + (index + 1) + " visual";
+  card.appendChild(imgEl);
+
+  const text = document.createElement("p");
+  text.className = "scene-text";
+  text.textContent = scene.narration;
+  card.appendChild(text);
+
+  card.appendChild(audioEl);
+  container.appendChild(card);
+}
+
+async function handleGenerate() {
+  const topic = document.getElementById("topic").value.trim();
+  const generateBtn = document.getElementById("generateBtn");
+  if (!topic) {
+    alert("Type a topic or tap Surprise me.");
+    return;
+  }
+
+  document.getElementById("scenes").innerHTML = "";
+  document.getElementById("log").innerHTML = "";
+  document.getElementById("videoTitle").textContent = "";
+  document.getElementById("videoTags").textContent = "";
+  generateBtn.disabled = true;
+
+  try {
+    setStatus("Writing script...");
+    log("If Puter asks you to sign in, that's expected, it's free.");
+    const script = await generateScript(topic);
+    log("Script ready: " + script.title);
+    document.getElementById("videoTitle").textContent = script.title;
+    document.getElementById("videoTags").textContent = script.tags.join(", ");
+
+    for (let i = 0; i < script.scenes.length; i++) {
+      const scene = script.scenes[i];
+
+      setStatus(
+        "Generating image " + (i + 1) + " of " + script.scenes.length + "..."
+      );
+      log("Scene " + (i + 1) + ": generating image...");
+      const imgEl = await puter.ai.txt2img(scene.image_prompt, {
+        model: "openai/gpt-image-1",
+      });
+
+      setStatus(
+        "Generating voiceover " + (i + 1) + " of " + script.scenes.length + "..."
+      );
+      log("Scene " + (i + 1) + ": generating voiceover...");
+      const audioResult = await puter.ai.txt2speech(scene.narration, {
+        provider: "openai",
+      });
+      const audioEl = toAudioElement(audioResult);
+
+      renderScene(i, scene, imgEl, audioEl);
+    }
+
+    setStatus("Done. Save each image and voiceover, then assemble in CapCut.");
+    log("All 4 scenes generated.");
+  } catch (err) {
+    setStatus(
+      "Something failed: " + describeError(err)
+    );
+    log("ERROR: " + describeError(err));
+  } finally {
+    generateBtn.disabled = false;
+  }
+}
+
+async function copyDebugInfo() {
+  const status = document.getElementById("status").textContent;
+  const logLines = Array.from(document.querySelectorAll(".log-line")).map(
+    (l) => l.textContent
+  );
+  const title = document.getElementById("videoTitle").textContent;
+  const tags = document.getElementById("videoTags").textContent;
+  const report = [
+    "Status: " + status,
+    "Title: " + title,
+    "Tags: " + tags,
+    "Log:",
+    ...logLines,
+  ].join("\n");
+
+  const btn = document.getElementById("copyLogBtn");
+  const original = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(report);
+    btn.textContent = "Copied!";
+  } catch (err) {
+    alert(
+      "Couldn't copy automatically, long-press the log text above and copy manually."
+    );
+  }
+  setTimeout(() => {
+    btn.textContent = original;
+  }, 1500);
+}
+
+document.getElementById("surpriseBtn").addEventListener("click", pickSeedTopic);
+document.getElementById("generateBtn").addEventListener("click", handleGenerate);
+document.getElementById("copyLogBtn").addEventListener("click", copyDebugInfo);
+</script>
+</body>
+</html>  footer { margin-top: 18px; font-size: 11px; color: var(--dim); }
+  footer p { margin: 4px 0; }
+  footer span { color: var(--text); }
+</style>
+</head>
+<body>
+  <div class="eyebrow">ANIMATED IMAGINED (AI)</div>
+  <h1>Video Builder</h1>
+  <p class="sub">Topic in, script and scenes out. No API key, no laptop.</p>
+
+  <section class="panel">
+    <label for="topic">Topic</label>
+    <input type="text" id="topic" placeholder="How the 1964 World's Fair imagined 2026" />
+    <button id="surpriseBtn" class="ghost-btn" type="button">Surprise me</button>
+  </section>
+
+  <button id="generateBtn" class="primary-btn" type="button">Generate</button>
+
+  <div id="status" class="status"></div>
+  <div id="log" class="log"></div>
+  <button id="copyLogBtn" class="ghost-btn" type="button">Copy details</button>
+  <div id="scenes" class="scenes"></div>
+
+  <footer>
+    <p>Title: <span id="videoTitle"></span></p>
+    <p>Tags: <span id="videoTags"></span></p>
+  </footer>
+
+<script>
+const SEED_TOPICS = [
+  "How the 1964 World's Fair imagined 2026",
+  "The Concorde's imagined successor that never flew",
+  "Pan Am's imagined 1980s Mars tourism ads",
+  "The imagined arcologies of 1970s architecture magazines",
+  "1950s imagined kitchens of the year 2000",
+  "The atomic age's imagined flying commuter cars",
+  "1960s imagined underwater cities that were never built",
+  "Imagined videophone ads from 1930s World's Fairs",
+  "The imagined robot butlers of 1962 Popular Mechanics covers",
+  "1980s imagined cyberpunk Tokyo that never fully arrived",
+  "The imagined domed cities of 1950s civil defense pamphlets",
+  "Imagined personal jetpacks promised by 1960s ad campaigns",
+];
+
+const TREND_SUBREDDITS = [
+  "RetroFuturism",
+  "ImaginaryTechnology",
+  "AlternateHistory",
+  "ImaginaryCityscapes",
+];
+
+function log(message) {
+  const el = document.getElementById("log");
+  const line = document.createElement("div");
+  line.className = "log-line";
+  line.textContent = message;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(text) {
+  document.getElementById("status").textContent = text;
+}
+
+function randomFrom(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+async function fetchTrendingTopic() {
+  const sub = randomFrom(TREND_SUBREDDITS);
+  try {
+    const res = await fetch(
+      "https://www.reddit.com/r/" + sub + "/top.json?t=week&limit=15"
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const posts = (data.data.children || [])
+      .map((p) => p.data)
+      .filter((p) => p && p.title && !p.stickied);
+    if (posts.length === 0) return null;
+    const post = randomFrom(posts);
+    return post.title + " (from r/" + sub + ")";
+  } catch (err) {
+    return null;
+  }
+}
+
+async function pickSeedTopic() {
+  const btn = document.getElementById("surpriseBtn");
+  btn.disabled = true;
+  btn.textContent = "Finding a topic...";
+  let topic = null;
+  try {
+    topic = await fetchTrendingTopic();
+  } catch (err) {
+    topic = null;
+  }
+  document.getElementById("topic").value = topic || randomFrom(SEED_TOPICS);
+  btn.disabled = false;
+  btn.textContent = "Surprise me";
+}
+
+function scriptPrompt(topic) {
+  return [
+    'Write a YouTube Shorts script for a channel called "Animated Imagined (AI)"',
+    'about this imagined concept: "' + topic + '".',
+    "The channel shows AI-generated imagined visuals of things that never existed:",
+    "retrofuturism, alternate history, lost inventions, imagined cities.",
+    "Style: vivid, cinematic, spoken narration, no stage directions, no emojis.",
+    "Break it into exactly 4 scenes, 20 to 30 words of narration each, building",
+    "to a payoff in the last scene. For each scene write an image generation",
+    "prompt for the single visual: vivid, concrete, cinematic lighting, detailed",
+    "illustration, retrofuturistic art style, no text or words in the image.",
+    "Return ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:",
+    '{"title": "string under 60 chars", "tags": ["tag1","tag2","tag3","tag4","tag5"],',
+    '"scenes": [{"narration": "string", "image_prompt": "string"}, ... exactly 4 items]}',
+  ].join(" ");
+}
+
+function describeError(err) {
+  if (!err) return "Unknown error";
+  if (typeof err === "string") return err;
+  const parts = [];
   if (err.message) parts.push(err.message);
   if (err.error) {
     if (typeof err.error === "string") parts.push(err.error);
